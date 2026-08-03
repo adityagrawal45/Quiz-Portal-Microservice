@@ -1,114 +1,180 @@
 # Quiz Portal Microservice
 
-A Spring Boot / Spring Cloud microservices project for managing quizzes and questions, with service discovery and API gateway routing.
+A microservices-based quiz platform built with Spring Boot and Spring Cloud. Quizzes and questions live in separate services, discover each other through Eureka, and talk to each other over Feign — all fronted by a single API Gateway.
 
 ## Architecture
 
-The system is composed of four independent Spring Boot services:
+The system is made up of four independent Spring Boot applications:
 
 | Service | Port | Responsibility |
 |---|---|---|
-| **ServiceRegistry** | `8761` | Eureka service registry used by all other services for discovery. |
-| **ApiGateway** | `8083` | Single entry point that routes external requests to the appropriate downstream service via Spring Cloud Gateway. |
-| **QuizService** | `8081` | Manages quizzes (create, list, fetch by id). |
-| **QuestionService** | `9092` | Manages questions belonging to a quiz (create, list, fetch by id, fetch by quiz). |
+| **ServiceRegistry** | `8761` | Eureka server. Every other service registers here on startup and uses it to discover instances of the others. |
+| **ApiGateway** | `8083` | Single public entry point. Routes incoming requests to the right downstream service using Spring Cloud Gateway, resolving instances through Eureka. |
+| **QuizService** | `8081` | Owns quizzes. Create/list/fetch quizzes, and enrich each quiz with its questions by calling QuestionService. |
+| **QuestionService** | `9092` | Owns questions. Create/list/fetch questions, and look up all questions belonging to a given quiz. |
 
 ```
-Client → ApiGateway (8083) → QuizService (8081) / QuestionService (9092)
-                ↑                        ↑                  ↑
-                └──────── ServiceRegistry (8761) ────────────┘
+                        ┌────────────────────┐
+                        │   ServiceRegistry   │
+                        │   (Eureka, 8761)    │
+                        └─────────▲───────────┘
+                     registers /  │  \ registers
+                     discovers   │   \  discovers
+                       ┌─────────┘    └─────────┐
+                       │                         │
+                 ┌─────▼──────┐           ┌──────▼──────┐
+   Client ──────►│ ApiGateway │──lb://───►│ QuizService │
+                 │   (8083)   │           │   (8081)    │
+                 └─────┬──────┘           └──────┬──────┘
+                       │                          │ Feign (GET /question/quiz/{id})
+                       │  lb://                   ▼
+                       └─────────────────►┌───────────────┐
+                                           │ QuestionService│
+                                           │    (9092)      │
+                                           └────────────────┘
 ```
 
-The `ApiGateway` routes requests prefixed with `/quiz/**` to `QUIZ-SERVICE` and `/question/**` to `QUESTION-SERVICE`, resolving instances through Eureka.
+- The **ApiGateway** routes `/quiz/**` to `QUIZ-SERVICE` and `/question/**` to `QUESTION-SERVICE`.
+- **QuizService** does not store questions itself. When a quiz is fetched, it calls **QuestionService** through a Feign client (`QuestionClient`) to pull in the questions for that quiz and attaches them to the response.
 
-## Tech Stack
+## Tech stack
 
 - Java 17
 - Spring Boot 3.5.6
 - Spring Cloud 2025.0.0
-- Spring Cloud Gateway
-- Spring Cloud Netflix Eureka (server & client)
-- Spring Data JPA
-- MySQL
+  - Spring Cloud Gateway
+  - Spring Cloud Netflix Eureka (server & client)
+  - Spring Cloud OpenFeign
+  - Spring Cloud LoadBalancer
+- Spring Data JPA + MySQL
+- Lombok
 - Maven
 
 ## Prerequisites
 
 - JDK 17+
-- Maven 3.9+ (or use the included `mvnw` wrapper)
-- MySQL running locally with a `quiz-portal` database
+- Maven 3.9+ (or just use the bundled `mvnw` wrapper in each module)
+- A running MySQL instance
 
-## Getting Started
+## Getting started
 
-### 1. Database
+### 1. Create the database
 
-Create the database used by `QuizService` and `QuestionService`:
+QuizService and QuestionService both connect to the same schema:
 
 ```sql
 CREATE DATABASE `quiz-portal`;
 ```
 
-Both services default to:
+Both services default to these credentials in `src/main/resources/application.properties`:
 
-```
+```properties
 spring.datasource.url=jdbc:mysql://localhost:3306/quiz-portal
 spring.datasource.username=root
 spring.datasource.password=qwerty
 ```
 
-Update these in each service's `src/main/resources/application.properties` to match your local MySQL credentials.
+Update them to match your local MySQL setup before running. `spring.jpa.hibernate.ddl-auto=update` is set, so tables are created/updated automatically on startup — no manual migrations needed.
 
-### 2. Run the services
+### 2. Start the services, in order
 
-Start the services in the following order, each from its own directory:
+Discovery has to be up first, and the gateway only makes sense once the services it routes to are registered:
 
 ```bash
-# 1. Service Registry (Eureka)
+# 1. Service Registry (Eureka) — must be first
 cd ServiceRegistry
 ./mvnw spring-boot:run
 
-# 2. Quiz Service
-cd QuizService
-./mvnw spring-boot:run
-
-# 3. Question Service
+# 2. Question Service
 cd QuestionService
 ./mvnw spring-boot:run
 
-# 4. API Gateway
+# 3. Quiz Service (depends on QuestionService being discoverable)
+cd QuizService
+./mvnw spring-boot:run
+
+# 4. API Gateway — start last
 cd ApiGateway
 ./mvnw spring-boot:run
 ```
 
-Once running, the Eureka dashboard is available at `http://localhost:8761`.
+Check `http://localhost:8761` once ServiceRegistry is up — you should see `QUIZ-SERVICE`, `QUESTION-SERVICE`, and `API-GATEWAY` register there as the others come online.
 
-## API Endpoints
+## API reference
 
-All requests can go through the API Gateway at `http://localhost:8083`, or directly to each service.
+Everything is reachable through the gateway at `http://localhost:8083`, or directly against each service's own port.
 
-### Quiz Service (`/quiz`)
+### Quiz Service — `/quiz`
 
 | Method | Endpoint | Description |
 |---|---|---|
 | POST | `/quiz` | Create a new quiz |
-| GET | `/quiz` | List all quizzes |
-| GET | `/quiz/{id}` | Get a quiz by id |
+| GET | `/quiz` | List all quizzes (each one enriched with its questions) |
+| GET | `/quiz/{id}` | Get a single quiz by id (enriched with its questions) |
 
-### Question Service (`/question`)
+Example — create a quiz:
+
+```bash
+curl -X POST http://localhost:8083/quiz \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Spring Boot Basics"}'
+```
+
+### Question Service — `/question`
 
 | Method | Endpoint | Description |
 |---|---|---|
 | POST | `/question` | Create a new question |
 | GET | `/question` | List all questions |
-| GET | `/question/{questionId}` | Get a question by id |
-| GET | `/question/quiz/{quizId}` | List questions for a given quiz |
+| GET | `/question/{questionId}` | Get a single question by id |
+| GET | `/question/quiz/{quizId}` | List all questions belonging to a given quiz |
 
-## Project Structure
+Example — add a question to a quiz:
+
+```bash
+curl -X POST http://localhost:8083/question \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What annotation marks a Spring Boot entry point?", "quizId": 1}'
+```
+
+## Data model
+
+**Quiz** (`QuizService`)
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | Long | Auto-generated |
+| `title` | String | |
+| `question` | List\<Question\> | Not persisted — populated at read time via a Feign call to QuestionService |
+
+**Question** (`QuestionService`)
+
+| Field | Type | Notes |
+|---|---|---|
+| `questionId` | Long | Auto-generated |
+| `question` | String | |
+| `quizId` | Long | Foreign reference to the owning quiz |
+
+## Project structure
 
 ```
 Quiz-Portal-Microservice/
-├── ServiceRegistry/    # Eureka discovery server
-├── ApiGateway/         # Spring Cloud Gateway routing
-├── QuizService/        # Quiz management service
-└── QuestionService/    # Question management service
+├── ServiceRegistry/          # Eureka discovery server
+├── ApiGateway/                # Spring Cloud Gateway routing layer
+├── QuizService/
+│   ├── controllers/           # REST endpoints for quizzes
+│   ├── entities/              # Quiz, Question (read-only DTO for Feign responses)
+│   ├── repositories/          # Spring Data JPA repository
+│   └── services/               # QuizService, QuestionClient (Feign)
+└── QuestionService/
+    ├── controller/             # REST endpoints for questions
+    ├── entities/               # Question
+    ├── repostiories/           # Spring Data JPA repository
+    └── service/                # QuestionService implementation
 ```
+
+## Notes / known limitations
+
+- No authentication or authorization layer yet — all endpoints are open.
+- Database credentials are checked into `application.properties` for local dev convenience; swap these for environment variables or a secrets manager before deploying anywhere real.
+- No quiz-submission or scoring flow yet — the current services cover authoring quizzes and questions, not taking a quiz.
