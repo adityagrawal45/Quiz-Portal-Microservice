@@ -40,7 +40,7 @@ The system is made up of four independent Spring Boot applications:
 ## Tech stack
 
 - Java 17
-- Spring Boot 3.5.6
+- Spring Boot 3.5.
 - Spring Cloud 2025.0.0
   - Spring Cloud Gateway
   - Spring Cloud Netflix Eureka (server & client)
