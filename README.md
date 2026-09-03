@@ -1,6 +1,6 @@
 # Quiz Portal Microservice
 
-A microservices-based quiz platform built with Spring Boot and Spring Cloud. Quizzes and questions live in separate services, discover each other through Eureka, and talk to each other over Feign — all fronted by a single API Gateway.
+A microservices-based quiz platform built with Spring Boot and Spring Cloud. Quizzes and questions live in separate services, discover each other through Eureka, and talk to each other over Feign —
 
 ## Architecture
 
